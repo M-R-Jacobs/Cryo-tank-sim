@@ -1,0 +1,70 @@
+# v0.1
+# Vented tank at constant pressure: all heat leak goes into vaporizing liquid
+
+# pip install CoolProp numpy matplotlib
+
+import numpy as numpy
+import matplotlib.pyplot as mpl
+from CoolProp.CoolProp import PropsSI
+
+
+
+# Tank and environment parameters
+fluid = 'Nitrogen'      # later: 'Oxygen', 'Methane'
+V_tank = 0.5            # m^3
+fill_0 = 0.9            # initial liquid volume fraction
+P0 = 101325             # Pa, vent pressure
+A_surf = 3.0            # m^2, tank outer surface area
+q_MLI = 1.0             # W/m^2, MLI heat flux
+Q_struts = 2.0          # W, conduction through supports and penetrations
+
+
+
+# Saturated properties at the vent pressure
+h_l = PropsSI('H', 'P', P0, 'Q', 0, fluid)      # J/kg, saturated liquid
+h_v = PropsSI('H', 'P', P0, 'Q', 1, fluid)      # J/kg, saturated vapor
+h_fg = h_v - h_l                                # J/kg, latent heat
+rho_l = PropsSI('D', 'P', P0, 'Q', 0, fluid)    # kg/m^3
+T_sat = PropsSI('T', 'P', P0, 'Q', 0, fluid)    # K
+
+
+
+# Heat leak and boil-off rate
+Q_total = q_MLI * A_surf + Q_struts             # W
+mdot = Q_total / h_fg                           # kg/s
+
+
+
+# Liquid inventory over time
+m_l0 = rho_l * fill_0 * V_tank                  # kg
+t_empty = m_l0 / mdot                           # s
+day = 86400
+
+t = numpy.linspace(0, t_empty, 500)             # s
+m_l = m_l0 - mdot * t                           # kg
+fill = m_l / (rho_l * V_tank)
+
+
+
+# Summary
+print(f'Fluid:              {fluid}')
+print(f'T_sat at P0:        {T_sat:.2f} K')
+print(f'h_fg:               {h_fg/1e3:.1f} kJ/kg')
+print(f'rho_l:              {rho_l:.1f} kg/m^3')
+print(f'Heat leak:          {Q_total:.2f} W')
+print(f'Boil-off rate:      {mdot*day:.3f} kg/day')
+print(f'Boil-off fraction:  {100*mdot*day/m_l0:.3f} %/day of initial load')
+print(f'Initial liquid:     {m_l0:.1f} kg')
+print(f'Time to empty:      {t_empty/day:.1f} days')
+
+
+
+# Plot
+mpl.figure(figsize=(7, 4))
+mpl.plot(t/day, 100*fill)
+mpl.xlabel('Time [days]')
+mpl.ylabel('Liquid fill [% of tank volume]')
+mpl.title(f'Vented boil-off, {fluid} at {P0/1e3:.1f} kPa, Q = {Q_total:.1f} W')
+mpl.grid(alpha=0.3)
+mpl.tight_layout()
+mpl.show()
