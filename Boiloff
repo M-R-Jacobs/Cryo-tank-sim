@@ -1,14 +1,15 @@
 # v0.1
-# Vented tank at constant pressure: all heat leak goes into vaporizing liquid
+# Vented tank at constant pressure: all heat leak goes into vaporizing liquid. 
+# Then residual-gas conduction through the vacuum jacket
 
 # pip install CoolProp numpy matplotlib
 
 import numpy as numpy
 import matplotlib.pyplot as mpl
 from CoolProp.CoolProp import PropsSI
-
-
-
+ 
+ 
+ 
 # Tank and environment parameters
 fluid = 'Nitrogen'      # later: 'Oxygen', 'Methane'
 V_tank = 0.5            # m^3
@@ -17,54 +18,131 @@ P0 = 101325             # Pa, vent pressure
 A_surf = 3.0            # m^2, tank outer surface area
 q_MLI = 1.0             # W/m^2, MLI heat flux
 Q_struts = 2.0          # W, conduction through supports and penetrations
-
-
-
+ 
+ 
+ 
+# Vacuum jacket parameters
+T_hot = 293.0           # K, outer (warm) wall; also the gauge temperature
+gap = 0.02              # m, jacket annulus width
+P_jacket = 1e-3         # Pa, nominal jacket pressure
+ 
+# Residual gas: air (a leaking jacket); a well-baked jacket is mostly H2/He
+M_gas = 0.02897         # kg/mol
+gamma = 1.4             # cp/cv
+d_gas = 3.7e-10         # m, kinetic diameter
+k_gas = 0.017           # W/(m K), continuum conductivity averaged over 77-293 K
+alpha = 0.9             # thermal accommodation coefficient, both walls
+ 
+R_u = 8.314             # J/(mol K)
+k_B = 1.380649e-23      # J/K
+day = 86400             # s
+ 
+ 
+ 
 # Saturated properties at the vent pressure
 h_l = PropsSI('H', 'P', P0, 'Q', 0, fluid)      # J/kg, saturated liquid
 h_v = PropsSI('H', 'P', P0, 'Q', 1, fluid)      # J/kg, saturated vapor
 h_fg = h_v - h_l                                # J/kg, latent heat
 rho_l = PropsSI('D', 'P', P0, 'Q', 0, fluid)    # kg/m^3
 T_sat = PropsSI('T', 'P', P0, 'Q', 0, fluid)    # K
-
-
-
-# Heat leak and boil-off rate
-Q_total = q_MLI * A_surf + Q_struts             # W
-mdot = Q_total / h_fg                           # kg/s
-
-
-
-# Liquid inventory over time
 m_l0 = rho_l * fill_0 * V_tank                  # kg
-t_empty = m_l0 / mdot                           # s
-day = 86400
-
-t = numpy.linspace(0, t_empty, 500)             # s
-m_l = m_l0 - mdot * t                           # kg
-fill = m_l / (rho_l * V_tank)
-
-
-
-# Summary
-print(f'Fluid:              {fluid}')
-print(f'T_sat at P0:        {T_sat:.2f} K')
-print(f'h_fg:               {h_fg/1e3:.1f} kJ/kg')
-print(f'rho_l:              {rho_l:.1f} kg/m^3')
-print(f'Heat leak:          {Q_total:.2f} W')
-print(f'Boil-off rate:      {mdot*day:.3f} kg/day')
-print(f'Boil-off fraction:  {100*mdot*day/m_l0:.3f} %/day of initial load')
-print(f'Initial liquid:     {m_l0:.1f} kg')
-print(f'Time to empty:      {t_empty/day:.1f} days')
-
-
-
-# Plot
-mpl.figure(figsize=(7, 4))
-mpl.plot(t/day, 100*fill)
-mpl.xlabel('Time [days]')
-mpl.ylabel('Liquid fill [% of tank volume]')
-mpl.title(f'Vented boil-off, {fluid} at {P0/1e3:.1f} kPa, Q = {Q_total:.1f} W')
-mpl.grid(alpha=0.3)
+ 
+ 
+ 
+# Residual-gas heat flux through the jacket
+def q_free_molecular(P):
+    """Free-molecular regime (Kn >> 1): flux is linear in pressure.
+    q = a_eff * (gamma+1)/(gamma-1) * sqrt(R/(8 pi M T)) * P * dT
+    with P read by a gauge at T_hot."""
+    a_eff = alpha / (2 - alpha)                     # equal areas, equal alpha
+    G = (gamma + 1) / (gamma - 1) * numpy.sqrt(R_u / (8 * numpy.pi * M_gas * T_hot))
+    return a_eff * G * P * (T_hot - T_sat)          # W/m^2
+ 
+ 
+def q_continuum():
+    """Continuum regime (Kn << 1): Fourier conduction, independent of pressure."""
+    return k_gas * (T_hot - T_sat) / gap            # W/m^2
+ 
+ 
+def q_gas(P):
+    """Bridge the two regimes with a harmonic sum: whichever is smaller dominates."""
+    return 1 / (1 / q_free_molecular(P) + 1 / q_continuum())
+ 
+ 
+def knudsen(P):
+    """Mean free path over gap width, evaluated at the gauge temperature."""
+    mfp = k_B * T_hot / (numpy.sqrt(2) * numpy.pi * d_gas**2 * P)
+    return mfp / gap
+ 
+ 
+ 
+# Heat leak and boil-off rate
+def Q_total(P):
+    return q_MLI * A_surf + Q_struts + q_gas(P) * A_surf    # W
+ 
+ 
+def boiloff_rate(P):
+    return Q_total(P) / h_fg                                # kg/s
+ 
+ 
+ 
+# Summary at the nominal jacket pressure
+Q_nom = Q_total(P_jacket)
+mdot = boiloff_rate(P_jacket)
+ 
+print(f'Fluid:               {fluid}')
+print(f'T_sat at P0:         {T_sat:.2f} K')
+print(f'h_fg:                {h_fg/1e3:.1f} kJ/kg')
+print(f'rho_l:               {rho_l:.1f} kg/m^3')
+print(f'Jacket pressure:     {P_jacket:.1e} Pa  (Kn = {knudsen(P_jacket):.0f})')
+print(f'  MLI:               {q_MLI*A_surf:.2f} W')
+print(f'  Struts:            {Q_struts:.2f} W')
+print(f'  Residual gas:      {q_gas(P_jacket)*A_surf:.2f} W')
+print(f'Heat leak:           {Q_nom:.2f} W')
+print(f'Boil-off rate:       {mdot*day:.3f} kg/day')
+print(f'Boil-off fraction:   {100*mdot*day/m_l0:.3f} %/day of initial load')
+print(f'Time to empty:       {m_l0/mdot/day:.1f} days')
+ 
+ 
+ 
+# Plot 1: heat leak contributions vs. jacket pressure
+P_sweep = numpy.logspace(-6, 3, 400)        # Pa
+ 
+fig, (ax1, ax2) = mpl.subplots(1, 2, figsize=(12, 4.5))
+ 
+ax1.loglog(P_sweep, Q_total(P_sweep), 'k', lw=2, label='Total')
+ax1.loglog(P_sweep, q_gas(P_sweep) * A_surf, label='Residual gas')
+ax1.axhline(q_MLI * A_surf, ls='--', color='C1', label='MLI')
+ax1.axhline(Q_struts, ls='--', color='C2', label='Struts')
+ax1.axvspan(P_sweep[0], P_sweep[knudsen(P_sweep) > 10][-1], color='0.92', zorder=0)
+ax1.text(2e-6, 2e2, 'free-molecular\n(Kn > 10)', fontsize=9, va='top')
+ax1.set_xlabel('Jacket pressure [Pa]')
+ax1.set_ylabel('Heat leak [W]')
+ax1.set_title('Heat leak vs. jacket vacuum')
+ax1.grid(which='both', alpha=0.3)
+ax1.legend(loc='lower right')
+ 
+ax1b = ax1.twinx()
+ax1b.set_yscale('log')
+ax1b.set_ylim(numpy.array(ax1.get_ylim()) / h_fg * day / m_l0 * 100)
+ax1b.set_ylabel('Boil-off [%/day]')
+ 
+ 
+ 
+# Plot 2: liquid inventory at several jacket pressures
+for P in [1e-5, 1e-3, 1e-2, 1e-1, 1e0]:
+    mdot_P = boiloff_rate(P)
+    t_empty = m_l0 / mdot_P
+    t = numpy.linspace(0, t_empty, 300)
+    fill = (m_l0 - mdot_P * t) / (rho_l * V_tank)
+    ax2.plot(t / day, 100 * fill, label=f'{P:.0e} Pa')
+ 
+ax2.set_xlabel('Time [days]')
+ax2.set_ylabel('Liquid fill [% of tank volume]')
+ax2.set_title(f'Vented boil-off, {fluid} at {P0/1e3:.1f} kPa')
+ax2.set_xlim(left=0)
+ax2.grid(alpha=0.3)
+ax2.legend(title='Jacket pressure')
+ 
 mpl.tight_layout()
 mpl.show()
